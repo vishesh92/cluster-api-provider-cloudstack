@@ -31,6 +31,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+func (r *ReconciliationRunner) ResolveAffinityGroup(
+	name string,
+	affinityType string,
+	ag *infrav1.CloudStackAffinityGroup) error {
+
+	lowerName := strings.ToLower(name)
+	namespace := r.ReconciliationSubject.GetNamespace()
+	objKey := client.ObjectKey{Namespace: namespace, Name: lowerName}
+	if err := r.K8sClient.Get(r.RequestCtx, objKey, ag); client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	return nil
+}
+
 // GetOrCreateAffinityGroup of the passed name that's owned by the failure domain of the reconciliation subject and
 // the control plane that manages it.
 func (r *ReconciliationRunner) GetOrCreateAffinityGroup(
@@ -104,4 +118,69 @@ func GenerateAffinityGroupName(csm infrav1.CloudStackMachine, capiMachine *clust
 	}
 	return fmt.Sprintf("%s-%s-%sAffinity-%s-%s-%s",
 		capiCluster.Name, capiCluster.UID, titleCaser.String(csm.Spec.Affinity), managerOwnerRef.Name, managerOwnerRef.UID, csm.Spec.FailureDomainName), nil
+}
+
+// The computed affinity group name relevant to this machine.
+func GenerateAffinityGroupNameLegacy(csm infrav1.CloudStackMachine, capiMachine *clusterv1.Machine) (string, error) {
+	managerOwnerRef := GetManagementOwnerRef(capiMachine)
+	if managerOwnerRef == nil {
+		return "", errors.Errorf("could not find owner UID for %s/%s", csm.Namespace, csm.Name)
+	}
+	titleCaser := cases.Title(language.English)
+	return fmt.Sprintf("%sAffinity-%s-%s-%s",
+		titleCaser.String(csm.Spec.Affinity), managerOwnerRef.Name, managerOwnerRef.UID, csm.Spec.FailureDomainName), nil
+}
+
+func (r *ReconciliationRunner) RemoveAffinityGroupIfEmpty(
+	csm *infrav1.CloudStackMachine,
+	capiMachine *clusterv1.Machine,
+	capiCluster *clusterv1.Cluster,
+	fd *infrav1.CloudStackFailureDomain,
+) error {
+	agName, err := GenerateAffinityGroupName(*csm, capiMachine, capiCluster)
+	if err != nil {
+		return err
+	}
+	err = r.checkAndRemoveAffinityGroups(agName, csm, capiMachine, capiCluster, fd)
+	if err != nil {
+		return err
+	}
+
+	agName, err = GenerateAffinityGroupNameLegacy(*csm, capiMachine)
+	if err != nil {
+		return err
+	}
+	err = r.checkAndRemoveAffinityGroups(agName, csm, capiMachine, capiCluster, fd)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *ReconciliationRunner) checkAndRemoveAffinityGroups(
+	name string,
+	csm *infrav1.CloudStackMachine,
+	capiMachine *clusterv1.Machine,
+	capiCluster *clusterv1.Cluster,
+	fd *infrav1.CloudStackFailureDomain,
+) error {
+
+	ag := &infrav1.CloudStackAffinityGroup{}
+	err := r.ResolveAffinityGroup(name, csm.Spec.Affinity, ag)
+	if err != nil {
+		return err
+	}
+	if ag.Name != "" {
+		vmList, err := r.CSClient.ListVMInstancesWithAffinityGroup(ag.Spec.ID)
+		if err != nil {
+			return err
+		}
+
+		if len(vmList) == 0 || (len(vmList) == 1 && vmList[0].Id == *csm.Spec.InstanceID) {
+			if err := r.K8sClient.Delete(r.RequestCtx, ag); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

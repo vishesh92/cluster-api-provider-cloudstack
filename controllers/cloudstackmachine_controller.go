@@ -339,6 +339,10 @@ func (r *CloudStackMachineReconciliationRunner) ReconcileDelete() (retRes ctrl.R
 		return ctrl.Result{}, err
 	}
 
+	if err := r.RemoveAffinityGroupIfEmpty(r.ReconciliationSubject, r.CAPIMachine, r.CAPICluster, r.FailureDomain); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	controllerutil.RemoveFinalizer(r.ReconciliationSubject, infrav1.MachineFinalizer)
 	r.Log.Info("VM Deleted", "instanceID", r.ReconciliationSubject.Spec.InstanceID)
 	return ctrl.Result{}, nil
