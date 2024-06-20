@@ -38,6 +38,7 @@ type VMIface interface {
 	GetOrCreateVMInstance(*infrav1.CloudStackMachine, *clusterv1.Machine, *infrav1.CloudStackCluster, *infrav1.CloudStackFailureDomain, *infrav1.CloudStackAffinityGroup, string) error
 	ResolveVMInstanceDetails(*infrav1.CloudStackMachine) error
 	DestroyVMInstance(*infrav1.CloudStackMachine) error
+	ListVMInstancesWithAffinityGroup(string) ([]*cloudstack.VirtualMachine, error)
 }
 
 // Set infrastructure spec and status from the CloudStack API's virtual machine metrics type.
@@ -466,4 +467,16 @@ func (c *client) listVMInstanceDatadiskVolumeIDs(instanceID string) ([]string, e
 	}
 
 	return ret, nil
+}
+
+func (c *client) ListVMInstancesWithAffinityGroup(agId string) ([]*cloudstack.VirtualMachine, error) {
+	p := c.cs.VirtualMachine.NewListVirtualMachinesParams()
+	p.SetAffinitygroupid(agId)
+
+	listVmResp, err := c.csAsync.VirtualMachine.ListVirtualMachines(p)
+	if err != nil {
+		c.customMetrics.EvaluateErrorAndIncrementAcsReconciliationErrorCounter(err)
+		return nil, err
+	}
+	return listVmResp.VirtualMachines, nil
 }
